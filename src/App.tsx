@@ -127,6 +127,12 @@ function HomeView(props: {
         </p>
       </div>
 
+      <div className="status" style={{ marginBottom: 16 }}>
+        <strong>Tip:</strong> no need to install — open it as a regular
+        Safari tab. Models cache on the device and survive reloads,
+        redownloads, and tab restarts.
+      </div>
+
       <LangPicker
         src={props.src}
         tgt={props.tgt}

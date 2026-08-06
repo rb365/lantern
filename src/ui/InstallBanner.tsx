@@ -5,6 +5,12 @@ interface BIPEvent extends Event {
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 }
 
+function isIOS() {
+  if (typeof navigator === "undefined") return false;
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
 export function InstallBanner() {
   const [evt, setEvt] = useState<BIPEvent | null>(null);
   const [dismissed, setDismissed] = useState(false);
@@ -18,7 +24,12 @@ export function InstallBanner() {
     return () => window.removeEventListener("beforeinstallprompt", handler);
   }, []);
 
+  // iOS does NOT fire beforeinstallprompt; users there install via
+  // Share → Add to Home Screen, which we cover in the in-app hint.
+  // Hiding this banner on iOS prevents the "Install" → broken-PWA loop.
+  if (isIOS()) return null;
   if (!evt || dismissed) return null;
+
   return (
     <div className="install-banner" role="status">
       <span style={{ flex: 1 }}>
