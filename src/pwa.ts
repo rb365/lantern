@@ -22,11 +22,13 @@ export function registerPWA() {
   });
 
   window.addEventListener("load", () => {
-    // SW scope must match vite.config.ts's swBase (i.e. /lantern/).
+    // Classic worker (no `type: "module"`) is much more reliable on iOS
+    // PWA standalone mode. ES-module SWs there trigger an opaque
+    // "importing a module script failed" error during the install
+    // dialog. The injected manifest is built as a classic script.
     navigator.serviceWorker
-      .register("/lantern/sw.js", { scope: "/lantern/", type: "module" })
+      .register("/lantern/sw.js", { scope: "/lantern/" })
       .catch((err) => {
-        // Surface only — we don't want to block the app from loading.
         console.warn("Lantern SW registration failed:", err);
       });
   });

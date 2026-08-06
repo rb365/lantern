@@ -1,67 +1,55 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import { VitePWA } from "vite-plugin-pwa";
 
 // GH Pages serves either at the repo root (user/org Pages) or under
 // /<repo-name>/ (project Pages). Base is set via `LANTERN_BASE` env var
 // or the Vite CLI's --base flag. Defaults to "/" for local dev.
 const base = process.env.LANTERN_BASE ?? process.argv.find((a) => a.startsWith("--base="))?.slice("--base=".length) ?? "/";
 
-// vite-plugin-pwa MUST know the same base, otherwise the generated
-// service worker registers precache paths like "/index.html" while the
-// site lives under "/lantern/" — and iOS PWA silently fails every
-// chunk fetch ("importing a module script failed"). We normalize to a
-// trailing-slash form: "/" or "/lantern/".
-const swBase = base === "/" ? "/" : base.replace(/\/+$/, "") + "/";
-
 export default defineConfig({
   base,
   plugins: [
     react(),
-    VitePWA({
-      registerType: "autoUpdate",
-      base: swBase,
-      scope: swBase,
-      includeAssets: ["icons/icon-192.png", "icons/icon-512.png"],
-      manifest: {
-        name: "Lantern — Offline Translation",
-        short_name: "Lantern",
-        description: "Private, offline translation that runs in your browser. Nothing leaves your device.",
-        theme_color: "#0b0c0f",
-        background_color: "#0b0c0f",
-        display: "standalone",
-        orientation: "portrait",
-        scope: swBase,
-        start_url: swBase,
-        icons: [
-          { src: "icons/icon-192.png", sizes: "192x192", type: "image/png" },
-          { src: "icons/icon-512.png", sizes: "512x512", type: "image/png" },
-          {
-            src: "icons/icon-512.png",
-            sizes: "512x512",
-            type: "image/png",
-            purpose: "maskable",
-          },
-        ],
+    // We do NOT use vite-plugin-pwa here. The full feature set (workbox
+    // generation, manifest injection, asset precache beyond the app
+    // shell) repeatedly broke iOS PWA standalone mode with opaque
+    // "importing a module script failed" errors.
+    //
+    // Instead the service worker lives as a hand-rolled classic script
+    // at public/sw.js, the manifest is generated at build time via a
+    // small Vite plugin below, and src/pwa.ts registers the SW with
+    // the classic (non-module) form which iOS handles reliably.
+    {
+      name: "lantern-manifest",
+      apply: "build",
+      generateBundle() {
+        const manifest = {
+          name: "Lantern — Offline Translation",
+          short_name: "Lantern",
+          description:
+            "Private, offline translation that runs in your browser. Nothing leaves your device.",
+          theme_color: "#0b0c0f",
+          background_color: "#0b0c0f",
+          display: "standalone",
+          orientation: "portrait",
+          start_url: base === "/" ? "/" : base,
+          scope: base === "/" ? "/" : base,
+          icons: [
+            {
+              src: "icons/icon.svg",
+              sizes: "any",
+              type: "image/svg+xml",
+              purpose: "any maskable",
+            },
+          ],
+        };
+        this.emitFile({
+          type: "asset",
+          fileName: "manifest.webmanifest",
+          source: JSON.stringify(manifest, null, 2),
+        });
       },
-      // We use injectManifest so we ship a hand-written SW (src/sw.ts)
-      // that targets our exact URLs under /lantern/. The plugin's
-      // bundled SW uses an AMD/importScripts wrapper that iOS PWA
-      // standalone mode handles unreliably — leading to
-      // "importing a module script failed" when our 6 MB engine chunk
-      // is fetched for the first time.
-      strategies: "injectManifest",
-      srcDir: "src",
-      filename: "sw.ts",
-      // No auto-register: src/pwa.ts does it with type: "module".
-      injectRegister: false,
-      injectManifest: {
-        // Don't precache large engine bundles or wasm; each engine
-        // owns its own cache. We only precache the tiny app shell.
-        globPatterns: ["**/*.{html,css,svg,png,webmanifest}"],
-        maximumFileSizeToCacheInBytes: 2 * 1024 * 1024,
-      },
-    }),
+    },
   ],
   optimizeDeps: {
     exclude: ["@huggingface/transformers", "@mlc-ai/web-llm"],
