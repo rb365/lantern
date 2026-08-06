@@ -1,0 +1,56 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Avoid overlapping deploys.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # Belt-and-suspenders against npm supply-chain attacks (Shai-Hulud family).
+      # Disables all package lifecycle scripts during install.
+      - name: Install (no scripts)
+        run: npm ci --ignore-scripts
+        env:
+          npm_config_audit_level: high
+          npm_config_fund: false
+
+      - name: Audit
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Build (base=/lantern/)
+        run: npm run build:gh
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
