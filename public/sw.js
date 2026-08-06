@@ -16,10 +16,11 @@
 //   - fall back to index.html on navigation miss (the engine bundles
 //     are 6 MB and we never want a redirect there)
 
-const VERSION = "v1";
+const VERSION = "v2";
 const SHELL_CACHE = `lantern-shell-${VERSION}`;
 const HF_CACHE = `hf-models-${VERSION}`;
 const MLC_CACHE = `webllm-models-${VERSION}`;
+const OCR_CACHE = `ocr-assets-${VERSION}`;
 
 const SHELL = [
   "/lantern/",
@@ -47,7 +48,7 @@ self.addEventListener("activate", (event) => {
         names
           .filter(
             (n) =>
-              ![SHELL_CACHE, HF_CACHE, MLC_CACHE].includes(n) &&
+              ![SHELL_CACHE, HF_CACHE, MLC_CACHE, OCR_CACHE].includes(n) &&
               n.startsWith("lantern-")
           )
           .map((n) => caches.delete(n))
@@ -73,8 +74,17 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(cacheFirst(req, MLC_CACHE));
     return;
   }
+  // Tesseract.js worker / core / traineddata (jsDelivr or unpkg).
+  // Cache so photo OCR works offline after first download.
+  if (
+    (url.host === "cdn.jsdelivr.net" || url.host === "unpkg.com") &&
+    /tesseract/i.test(url.pathname)
+  ) {
+    event.respondWith(cacheFirst(req, OCR_CACHE));
+    return;
+  }
   // Same-origin: do nothing — let the browser handle it.
-  // Cross-origin (other than HF / MLC): also do nothing.
+  // Cross-origin (other than HF / MLC / OCR CDNs): also do nothing.
 });
 
 async function cacheFirst(req, cacheName) {

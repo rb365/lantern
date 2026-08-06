@@ -34,7 +34,7 @@ Adding a new model is two lines in `src/registry/catalog.ts`.
 - vite-plugin-pwa (service worker, manifest, installability)
 - `@huggingface/transformers` for OPUS-MT-family models
 - `@mlc-ai/web-llm` for Qwen/Gemma/Phi-style general LLMs
-- PaddleOCR v6 (Tiny) via CDN, Tesseract as fallback
+- Tesseract.js for on-device OCR (PaddleOCR adapter stubbed; CDN ESM path was broken on iOS)
 - `idb` for the local model registry
 
 ## Run

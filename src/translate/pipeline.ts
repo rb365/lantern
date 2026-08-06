@@ -23,20 +23,69 @@ export interface PhotoTranslateResult {
   fullTranslation: string;
 }
 
+function friendlyError(e: unknown): string {
+  const msg = (e as any)?.message ?? String(e);
+  // Safari's opaque module-load failure — map to something actionable.
+  if (/importing a module script failed|Failed to fetch dynamically imported module|error loading dynamically imported module/i.test(msg)) {
+    return (
+      "Could not load the OCR engine (module import failed). " +
+      "On iPhone: hard-refresh the page, or clear the site data for this " +
+      "GitHub Pages origin and try again with a network connection so " +
+      "Tesseract can download once."
+    );
+  }
+  return msg;
+}
+
 export async function translatePhoto(
   image: Blob | HTMLImageElement | ImageBitmap,
   src: string,
   tgt: string,
   onProgress?: (stage: string, pct: number) => void
 ): Promise<PhotoTranslateResult> {
-  onProgress?.("ocr", 0.1);
-  const ocr = await pickOCR();
-  const result: OCRResult = await ocr.recognize(image);
+  onProgress?.("Loading OCR…", 0.05);
+  let ocr;
+  try {
+    ocr = await pickOCR(src);
+  } catch (e) {
+    throw new Error(friendlyError(e));
+  }
 
-  onProgress?.("ocr", 0.35);
+  onProgress?.("Reading text…", 0.15);
+  let result: OCRResult;
+  try {
+    result = await ocr.recognize(image);
+  } catch (e) {
+    throw new Error(`OCR failed: ${friendlyError(e)}`);
+  }
 
+  onProgress?.("Reading text…", 0.35);
+
+  // If we got free-form text but no boxes, still translate the whole blob.
   if (!result.blocks.length) {
-    return { blocks: [], fullText: "", fullTranslation: "" };
+    const full = (result.text ?? "").trim();
+    if (!full) {
+      return { blocks: [], fullText: "", fullTranslation: "" };
+    }
+    onProgress?.("Translating…", 0.5);
+    try {
+      const t = await modelManager.translate(full, src, tgt);
+      onProgress?.("Done", 1);
+      return {
+        blocks: [
+          {
+            text: full,
+            box: [0.05, 0.05, 0.9, 0.2],
+            confidence: 0.5,
+            translated: t,
+          },
+        ],
+        fullText: full,
+        fullTranslation: t,
+      };
+    } catch (e: any) {
+      throw new Error(`Translate failed: ${e?.message ?? e}`);
+    }
   }
 
   // Translate block-by-block so the overlay can stick each translation to
@@ -54,7 +103,7 @@ export async function translatePhoto(
     if (!blk.text.trim()) {
       out.push({ ...blk, translated: "" });
       done++;
-      onProgress?.("translate", 0.35 + (0.6 * done) / Math.max(total, 1));
+      onProgress?.("Translating…", 0.35 + (0.6 * done) / Math.max(total, 1));
       continue;
     }
     try {
@@ -65,10 +114,10 @@ export async function translatePhoto(
       out.push({ ...blk, translated: `[error: ${e.message}]` });
     }
     done++;
-    onProgress?.("translate", 0.35 + (0.6 * done) / Math.max(total, 1));
+    onProgress?.("Translating…", 0.35 + (0.6 * done) / Math.max(total, 1));
   }
 
-  onProgress?.("done", 1);
+  onProgress?.("Done", 1);
   return { blocks: out, fullText: fullSrc.trim(), fullTranslation: fullTgt.trim() };
 }
 

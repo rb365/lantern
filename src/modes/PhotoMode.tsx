@@ -37,14 +37,22 @@ export function PhotoMode({ src, tgt, onBack }: Props) {
     imgRef.current = img;
 
     try {
+      setStage("Starting…");
+      setPct(0.02);
       const r = await translatePhoto(file, src, tgt, (s, p) => {
         setStage(s);
         setPct(p);
       });
       setResult(r);
-      draw(img, r);
+      if (!r.blocks.length && !r.fullText) {
+        setError("No text found in this photo. Try a clearer shot or better lighting.");
+      } else {
+        draw(img, r);
+      }
     } catch (e: any) {
-      setError(e.message);
+      setError(e?.message ?? String(e));
+      setStage("");
+      setPct(0);
     } finally {
       URL.revokeObjectURL(url);
     }

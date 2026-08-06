@@ -57,8 +57,11 @@ export default defineConfig({
   build: {
     target: "es2022",
     sourcemap: false,
-    rollupOptions: {
-      external: ["tesseract.js"],
-    },
+    // tesseract.js is a real dependency now (primary OCR). Do NOT mark it
+    // external — that left production builds trying to resolve a bare
+    // specifier at runtime, which fails on GitHub Pages / iOS Safari.
+  },
+  worker: {
+    format: "es",
   },
 });
