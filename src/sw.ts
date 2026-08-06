@@ -2,38 +2,33 @@
 
 // Hand-written service worker for Lantern.
 //
-// Why hand-written instead of vite-plugin-pwa's generated SW?
-// Because iOS PWA in standalone mode has well-known issues with the
-// AMD/importScripts-based wrapper the generated SW uses — manifesting
-// as "importing a module script failed" the moment a large engine
-// bundle is fetched.
+// Deliberately minimal. We deliberately DO NOT install any
+// NavigationRoute fallback, because iOS PWA standalone mode links any
+// SW network-fallback error to the page that loaded the engine chunk,
+// surfacing the error as "importing a module script failed" — even when
+// the engine chunk itself was fetched fine.
 //
-// This SW is intentionally minimal:
-//   - precache the small app shell at exact, explicit paths
+// Responsibilities:
+//   - precache the small app shell at explicit, absolute URLs
 //   - runtime-cache HF / MLC model artifacts (CacheFirst, generous TTL)
-//   - serve index.html for any SPA navigation fallback
+//   - leave everything else (including our own engine bundles) to the
+//     network, no SW interference
 //
-// It does NOT cache the giant WebLLM/Transformers.js engine bundles —
-// those are managed by those libraries' own internal caches.
+// Engine bundles and large WASMs are managed by each engine library's
+// own internal cache; we don't touch them.
 
 import { precacheAndRoute } from "workbox-precaching";
-import { registerRoute, NavigationRoute } from "workbox-routing";
+import { registerRoute } from "workbox-routing";
 import { CacheFirst } from "workbox-strategies";
 import { ExpirationPlugin } from "workbox-expiration";
 
 declare const self: ServiceWorkerGlobalScope & { __WB_MANIFEST: any };
 
+// Precache only the tiny static shell. Vite hashes app-code bundles
+// via index.html references, so we let the browser fetch them straight
+// through the network each load (which is fast on /lantern/ even from
+// cold cache).
 precacheAndRoute(self.__WB_MANIFEST);
-
-// SPA fallback: any unauthenticated navigation under our scope gets
-// index.html so the client-side router can take over.
-registerRoute(new NavigationRoute(
-  async () => {
-    const cache = await caches.open("lantern-shell");
-    const hit = await cache.match("/lantern/index.html");
-    return hit ?? Response.redirect("/lantern/", 302);
-  }
-));
 
 // Runtime cache for HuggingFace model weights (OPUS-MT, OCR ONNX, etc.)
 registerRoute(
