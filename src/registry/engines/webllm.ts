@@ -21,7 +21,6 @@ const engines = new Map<string, any>();
 export const webllmEngine: Engine = {
   async isSupported() {
     try {
-      const mlc = await ensureImport();
       // WebLLM is the entry function. Calling with no args checks GPU.
       return !!(navigator as any).gpu;
     } catch {
