@@ -26,6 +26,7 @@ const SHELL = [
   "/lantern/index.html",
   "/lantern/manifest.webmanifest",
   "/lantern/icons/icon.svg",
+  "/lantern/build.json",
 ];
 
 self.addEventListener("install", (event) => {

@@ -7,6 +7,7 @@ import { PhotoMode } from "./modes/PhotoMode";
 import { CameraMode } from "./modes/CameraMode";
 import { idb } from "./storage/idb";
 import { probeDevice, type DeviceProfile } from "./lib/deviceDetect";
+import { loadBuildInfo, type BuildInfo } from "./buildInfo";
 
 type View = "home" | "text" | "photo" | "camera" | "settings";
 
@@ -26,6 +27,7 @@ export default function App() {
   const [src, setSrc] = useState("auto");
   const [tgt, setTgt] = useState("en");
   const [device, setDevice] = useState<DeviceProfile | null>(null);
+  const [build, setBuild] = useState<BuildInfo | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -36,8 +38,15 @@ export default function App() {
       setSrc(saved.src);
       setTgt(saved.tgt);
       setDevice(await probeDevice());
+      setBuild(await loadBuildInfo());
     })();
   }, []);
+
+  // Surface the running build in the document title so iOS PWA (which
+  // shows the title in the status-bar area) reflects the version too.
+  useEffect(() => {
+    if (build) document.title = `Lantern ${build.version}`;
+  }, [build]);
 
   useEffect(() => {
     idb.setPref("lang", { src, tgt });
@@ -52,6 +61,7 @@ export default function App() {
           setSrc={setSrc}
           setTgt={setTgt}
           device={device}
+          build={build}
           onPick={(v) => setView(v)}
         />
       )}
@@ -78,6 +88,7 @@ function HomeView(props: {
   setSrc: (s: string) => void;
   setTgt: (s: string) => void;
   device: DeviceProfile | null;
+  build: BuildInfo | null;
   onPick: (v: View) => void;
 }) {
   return (
@@ -87,7 +98,24 @@ function HomeView(props: {
           <span className="mark"><Logo /></span>
           Lantern
         </div>
-        <button className="ghost" onClick={() => props.onPick("settings")}>Settings</button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {props.build && (
+            <span
+              title={`commit ${props.build.commit}`}
+              style={{
+                fontSize: 11,
+                color: "var(--fg-dim)",
+                fontFamily: "ui-monospace, monospace",
+                padding: "2px 6px",
+                border: "1px solid #2a2d35",
+                borderRadius: 6,
+              }}
+            >
+              {props.build.version} · {props.build.displayStamp}
+            </span>
+          )}
+          <button className="ghost" onClick={() => props.onPick("settings")}>Settings</button>
+        </div>
       </header>
 
       <div className="hero">

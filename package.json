@@ -1,13 +1,14 @@
 {
   "name": "lantern",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Lantern — private, offline translation that runs in your browser.",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "build:gh": "tsc --noEmit && vite build --base=/lantern/",
+    "build": "node build-info.cjs && tsc --noEmit && vite build",
+    "build:gh": "node build-info.cjs && tsc --noEmit && vite build --base=/lantern/",
+    "version": "node build-info.cjs --skip-bump",
     "preview": "vite preview --host"
   },
   "dependencies": {

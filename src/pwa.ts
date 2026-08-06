@@ -1,15 +1,17 @@
 /**
  * Service worker registration.
  *
- * Hand-rolled instead of using vite-plugin-pwa's auto-injection so we can
- * explicitly pass `type: "module"` (our generated SW is an ES module — see
- * .github/workflows/deploy.yml and vite.config.ts). Without this, Safari
- * iOS rejects the SW as "importing a module script failed" because the
- * default register call uses the classic-worker type.
+ * Classic worker (no `type: "module"`) — the only form iOS PWA
+ * standalone mode reliably accepts without the opaque
+ * "importing a module script failed" error during the install dialog.
  *
- * Also subscribes to updates: when a new SW activates, we reload so users
- * never run stale code.
+ * We append the running build version as a query string on the SW URL
+ * so the browser sees a fresh script every release and replaces the
+ * old SW. Without this cache-buster, an iOS PWA can hold onto a stale
+ * SW for the lifetime of the install.
  */
+import { loadBuildInfo } from "./buildInfo";
+
 export function registerPWA() {
   if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
 
@@ -21,13 +23,13 @@ export function registerPWA() {
     window.location.reload();
   });
 
-  window.addEventListener("load", () => {
-    // Classic worker (no `type: "module"`) is much more reliable on iOS
-    // PWA standalone mode. ES-module SWs there trigger an opaque
-    // "importing a module script failed" error during the install
-    // dialog. The injected manifest is built as a classic script.
+  window.addEventListener("load", async () => {
+    const build = await loadBuildInfo().catch(() => null);
+    const v = build?.version ?? "0";
     navigator.serviceWorker
-      .register("/lantern/sw.js", { scope: "/lantern/" })
+      .register(`/lantern/sw.js?v=${encodeURIComponent(v)}`, {
+        scope: "/lantern/",
+      })
       .catch((err) => {
         console.warn("Lantern SW registration failed:", err);
       });
