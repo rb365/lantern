@@ -36,8 +36,11 @@ export default defineConfig({
         ],
       },
       workbox: {
-        // Cache the app shell. Model weights are handled separately via IDB.
-        globPatterns: ["**/*.{js,css,html,svg,png,woff2}"],
+        // Cache the small app shell — index.html and a tiny critical CSS.
+        // Model weights and engine bundles are managed by each engine's
+        // own (much larger) cache so they don't pollute the precache.
+        globPatterns: ["**/*.{html,css,svg,png,woff2}"],
+        maximumFileSizeToCacheInBytes: 2 * 1024 * 1024,
         runtimeCaching: [
           {
             // Cache Hugging Face model weights (OPUS-MT/transformers.js models).
@@ -58,5 +61,8 @@ export default defineConfig({
   build: {
     target: "es2022",
     sourcemap: false,
+    rollupOptions: {
+      external: ["tesseract.js"],
+    },
   },
 });
