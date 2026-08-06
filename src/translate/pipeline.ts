@@ -1,16 +1,12 @@
 /**
  * Translate pipeline: image (or already-OCR'd text) → translated text.
  *
- *   1. Pick an OCR engine (PaddleOCR by default).
- *   2. Run OCR. Get back blocks with bounding boxes.
- *   3. Translate each block (or the joined text) using the loaded LLM.
- *   4. Hand back blocks + translations for the UI to overlay.
- *
- * If a multimodal model is loaded (Gemma 4 E4B) we'd skip OCR entirely;
- * that's a future path. For now we keep OCR + translate as separate steps
- * so the OCR engine is also swappable.
+ *   1. OCR (Tesseract) with preprocess + garbage filter.
+ *   2. Translate surviving blocks with the loaded model.
+ *   3. Hand back blocks + translations for the UI overlay.
  */
 import { pickOCR, type OCRResult, type OCRBlock } from "../ocr";
+import { isPlausibleOCRText } from "../ocr/filter";
 import { modelManager } from "../registry";
 
 export interface TranslatedBlock extends OCRBlock {
@@ -25,7 +21,6 @@ export interface PhotoTranslateResult {
 
 function friendlyError(e: unknown): string {
   const msg = (e as any)?.message ?? String(e);
-  // Safari's opaque module-load failure — map to something actionable.
   if (/importing a module script failed|Failed to fetch dynamically imported module|error loading dynamically imported module/i.test(msg)) {
     return (
       "Could not load the OCR engine (module import failed). " +
@@ -36,6 +31,9 @@ function friendlyError(e: unknown): string {
   }
   return msg;
 }
+
+/** Cap how many blocks we translate per photo (keeps phones responsive). */
+const MAX_BLOCKS = 24;
 
 export async function translatePhoto(
   image: Blob | HTMLImageElement | ImageBitmap,
@@ -61,25 +59,38 @@ export async function translatePhoto(
 
   onProgress?.("Reading text…", 0.35);
 
-  // If we got free-form text but no boxes, still translate the whole blob.
-  if (!result.blocks.length) {
+  // Prefer filtered line boxes; fall back to whole-page text once.
+  let blocks = result.blocks.filter((b) =>
+    isPlausibleOCRText(b.text, b.confidence)
+  );
+  if (blocks.length > MAX_BLOCKS) {
+    // Keep highest-confidence lines.
+    blocks = [...blocks]
+      .sort((a, b) => b.confidence - a.confidence)
+      .slice(0, MAX_BLOCKS)
+      .sort((a, b) => a.box[1] - b.box[1] || a.box[0] - b.box[0]);
+  }
+
+  if (!blocks.length) {
     const full = (result.text ?? "").trim();
-    if (!full) {
-      return { blocks: [], fullText: "", fullTranslation: "" };
+    if (!full || !isPlausibleOCRText(full, 0.5)) {
+      return { blocks: [], fullText: full, fullTranslation: "" };
     }
     onProgress?.("Translating…", 0.5);
     try {
       const t = await modelManager.translate(full, src, tgt);
       onProgress?.("Done", 1);
       return {
-        blocks: [
-          {
-            text: full,
-            box: [0.05, 0.05, 0.9, 0.2],
-            confidence: 0.5,
-            translated: t,
-          },
-        ],
+        blocks: t
+          ? [
+              {
+                text: full,
+                box: [0.05, 0.05, 0.9, 0.25],
+                confidence: 0.5,
+                translated: t,
+              },
+            ]
+          : [],
         fullText: full,
         fullTranslation: t,
       };
@@ -88,37 +99,42 @@ export async function translatePhoto(
     }
   }
 
-  // Translate block-by-block so the overlay can stick each translation to
-  // its bounding box. We also build a "full text" version for text mode
-  // and for users who want to copy it.
   const out: TranslatedBlock[] = [];
   let fullSrc = "";
   let fullTgt = "";
 
-  const total = result.blocks.length;
+  const total = blocks.length;
   let done = 0;
 
-  for (const blk of result.blocks) {
+  for (const blk of blocks) {
     fullSrc += blk.text + "\n";
-    if (!blk.text.trim()) {
-      out.push({ ...blk, translated: "" });
-      done++;
-      onProgress?.("Translating…", 0.35 + (0.6 * done) / Math.max(total, 1));
-      continue;
-    }
     try {
-      const t = await modelManager.translate(blk.text, src, tgt);
-      out.push({ ...blk, translated: t });
-      fullTgt += t + "\n";
+      const t = (await modelManager.translate(blk.text, src, tgt)).trim();
+      // Skip empty / unreadable markers so we don't paint song lyrics
+      // over random photo regions.
+      if (!t) {
+        out.push({ ...blk, translated: "" });
+      } else {
+        out.push({ ...blk, translated: t });
+        fullTgt += t + "\n";
+      }
     } catch (e: any) {
-      out.push({ ...blk, translated: `[error: ${e.message}]` });
+      out.push({ ...blk, translated: "" });
+      console.warn("block translate failed", e?.message ?? e);
     }
     done++;
     onProgress?.("Translating…", 0.35 + (0.6 * done) / Math.max(total, 1));
   }
 
+  // Only show blocks that actually produced a translation.
+  const shown = out.filter((b) => b.translated);
+
   onProgress?.("Done", 1);
-  return { blocks: out, fullText: fullSrc.trim(), fullTranslation: fullTgt.trim() };
+  return {
+    blocks: shown.length ? shown : out,
+    fullText: fullSrc.trim(),
+    fullTranslation: fullTgt.trim(),
+  };
 }
 
 export async function translateText(

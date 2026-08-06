@@ -72,11 +72,10 @@ export function CameraMode({ src, tgt, onBack }: Props) {
 
     const then = Date.now();
     try {
-      // Warm up OCR once
-      const ocr = await pickOCR();
-      void ocr;
+      // Warm OCR with the active source language so lang packs match.
+      await pickOCR(src);
       const blob = await new Promise<Blob | null>((res) =>
-        cnv.toBlob((b) => res(b), "image/jpeg", 0.7)
+        cnv.toBlob((b) => res(b), "image/jpeg", 0.85)
       );
       if (!blob || !running.current) return;
       const r = await translatePhoto(blob, src, tgt);

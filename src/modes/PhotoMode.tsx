@@ -124,9 +124,9 @@ export function PhotoMode({ src, tgt, onBack }: Props) {
               display: "block",
             }}
           />
-          <details style={{ marginTop: 12 }}>
+          <details open style={{ marginTop: 12 }}>
             <summary style={{ cursor: "pointer", color: "var(--fg-dim)" }}>
-              Plain text
+              What OCR saw → translation
             </summary>
             <pre
               style={{
@@ -138,11 +138,18 @@ export function PhotoMode({ src, tgt, onBack }: Props) {
                 fontSize: 13,
               }}
             >
-              {result.fullText}
-              {"\n\n—\n\n"}
-              {result.fullTranslation}
+              <span style={{ color: "var(--fg-dim)" }}>OCR:{"\n"}</span>
+              {result.fullText || "(nothing readable)"}
+              {"\n\n"}
+              <span style={{ color: "var(--fg-dim)" }}>Translation:{"\n"}</span>
+              {result.fullTranslation || "(empty)"}
             </pre>
           </details>
+          <p style={{ color: "var(--fg-dim)", fontSize: 12, marginTop: 8 }}>
+            If OCR already looks wrong, the model will too — try a sharper
+            photo, better light, and set the source language (not Auto) when
+            you know it.
+          </p>
         </div>
       )}
     </div>

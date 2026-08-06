@@ -3,11 +3,11 @@
  *
  * Uses tesseract.js (WASM). First recognize() downloads worker + language
  * data (~2–15 MB depending on langs); subsequent runs are cached by the
- * browser. Works on iOS Safari / PWA, unlike the previous CDN ESM import
- * of paddleocr-js which 404'd and triggered Safari's opaque
- * "importing a module script failed" error.
+ * browser.
  */
 import type { OCREngine, OCRResult, OCRBlock } from "./types";
+import { preprocessForOCR } from "./preprocess";
+import { filterOCRResult, mergeNearbyBlocks } from "./filter";
 
 type CreateWorker = typeof import("tesseract.js").createWorker;
 type Worker = Awaited<ReturnType<CreateWorker>>;
@@ -18,24 +18,20 @@ let _loadedLangs = "";
 
 /** Map app language codes → Tesseract traineddata ids. */
 function tessLangsFor(src?: string): string {
-  // Always include eng so mixed signs still work.
-  const codes = new Set<string>(["eng"]);
   const s = (src ?? "auto").toLowerCase();
-  if (s === "zh" || s === "zh-cn" || s === "zh-hans" || s === "auto") {
-    codes.add("chi_sim");
-  }
-  if (s === "zh-hant" || s === "zh-tw" || s === "zh-hk") {
-    codes.add("chi_tra");
-  }
-  if (s === "ja" || s === "auto") codes.add("jpn");
-  if (s === "ko") codes.add("kor");
-  if (s === "ru") codes.add("rus");
-  if (s === "es") codes.add("spa");
-  if (s === "fr") codes.add("fra");
-  if (s === "de") codes.add("deu");
-  // Prefer Chinese + English for auto (this app's main use case).
-  if (s === "auto") return "chi_sim+eng";
-  return Array.from(codes).join("+");
+  // Keep language packs focused — multi-lang packs raise false positives
+  // (Latin noise misread as Chinese / Japanese).
+  if (s === "zh" || s === "zh-cn" || s === "zh-hans") return "chi_sim";
+  if (s === "zh-hant" || s === "zh-tw" || s === "zh-hk") return "chi_tra";
+  if (s === "ja") return "jpn";
+  if (s === "ko") return "kor";
+  if (s === "ru") return "rus";
+  if (s === "es") return "spa";
+  if (s === "fr") return "fra";
+  if (s === "de") return "deu";
+  if (s === "en") return "eng";
+  // Auto / unknown: Chinese + English covers this app's main signage case.
+  return "chi_sim+eng";
 }
 
 async function ensureLib(): Promise<CreateWorker> {
@@ -51,7 +47,6 @@ async function ensureWorker(srcLang?: string): Promise<Worker> {
 
   if (_worker && _loadedLangs === langs) return _worker;
 
-  // Swap worker when language set changes.
   if (_worker) {
     try {
       await _worker.terminate();
@@ -61,12 +56,25 @@ async function ensureWorker(srcLang?: string): Promise<Worker> {
     _worker = null;
   }
 
-  // Let tesseract.js use its default CDN paths for worker/core/lang data.
-  // That avoids Vite base-path breakage on GitHub Pages (/lantern/) and
-  // is the path that works on iOS Safari.
   _worker = await createWorker(langs, 1, {
     // logger: (m) => console.debug("[tess]", m),
   });
+
+  // Sparse text (PSM 11) works better for phone photos of signs/menus
+  // than the default "single uniform block" assumption.
+  // See https://tesseract-ocr.github.io/tessdoc/ImproveQuality.html
+  try {
+    await _worker.setParameters({
+      tessedit_pageseg_mode: "11" as any, // SPARSE_TEXT
+      preserve_interword_spaces: "1",
+      // Slightly prefer dictionary words when available.
+      language_model_penalty_non_dict_word: "0.3",
+      language_model_penalty_non_freq_dict_word: "0.2",
+    } as any);
+  } catch {
+    // Older tesseract builds may reject some keys — ignore.
+  }
+
   _loadedLangs = langs;
   return _worker;
 }
@@ -80,7 +88,6 @@ function blocksFromData(
   const h = Math.max(imgH, 1);
   const out: OCRBlock[] = [];
 
-  // Prefer lines (good for signs/menus). Fall back to words, then paragraphs.
   const lines: any[] = data?.lines ?? [];
   if (lines.length) {
     for (const line of lines) {
@@ -95,7 +102,7 @@ function blocksFromData(
           Math.max(0, (b.x1 - b.x0) / w),
           Math.max(0, (b.y1 - b.y0) / h),
         ],
-        confidence: (line.confidence ?? 80) / 100,
+        confidence: (line.confidence ?? 0) / 100,
       });
     }
     return out;
@@ -114,31 +121,10 @@ function blocksFromData(
         Math.max(0, (b.x1 - b.x0) / w),
         Math.max(0, (b.y1 - b.y0) / h),
       ],
-      confidence: (word.confidence ?? 80) / 100,
+      confidence: (word.confidence ?? 0) / 100,
     });
   }
   return out;
-}
-
-async function imageSize(
-  image: Blob | HTMLImageElement | ImageBitmap
-): Promise<{ w: number; h: number }> {
-  if (typeof ImageBitmap !== "undefined" && image instanceof ImageBitmap) {
-    return { w: image.width, h: image.height };
-  }
-  if (typeof HTMLImageElement !== "undefined" && image instanceof HTMLImageElement) {
-    return {
-      w: image.naturalWidth || image.width,
-      h: image.naturalHeight || image.height,
-    };
-  }
-  if (image instanceof Blob) {
-    const bmp = await createImageBitmap(image);
-    const size = { w: bmp.width, h: bmp.height };
-    bmp.close?.();
-    return size;
-  }
-  return { w: 1, h: 1 };
 }
 
 /** Optional source-language hint set by the pipeline before recognize(). */
@@ -163,19 +149,25 @@ export const tesseractEngine: OCREngine = {
     }
   },
   async load(onProgress) {
-    // Warm the worker + default language pack so the first photo is faster.
     onProgress?.(0, this.sizeMB * 1024 * 1024);
     await ensureWorker(_srcLangHint);
     onProgress?.(this.sizeMB * 1024 * 1024, this.sizeMB * 1024 * 1024);
   },
   async recognize(image): Promise<OCRResult> {
     const worker = await ensureWorker(_srcLangHint);
-    const { w, h } = await imageSize(image);
-    const { data } = await worker.recognize(image as any);
-    const blocks = blocksFromData(data, w, h);
-    const text =
-      (data?.text ?? "").trim() ||
-      blocks.map((b) => b.text).join("\n");
-    return { text, blocks };
+    // Prep image for phone photos; use preprocessed dimensions for boxes.
+    const { blob, width, height } = await preprocessForOCR(image);
+    const { data } = await worker.recognize(blob);
+    let blocks = blocksFromData(data, width, height);
+    const rawText = (data?.text ?? "").trim();
+
+    // Drop garbage, then merge nearby lines so the translator sees phrases.
+    const filtered = filterOCRResult({ text: rawText, blocks });
+    blocks = mergeNearbyBlocks(filtered.blocks);
+
+    return {
+      text: blocks.map((b) => b.text).join("\n").trim() || filtered.text,
+      blocks,
+    };
   },
 };

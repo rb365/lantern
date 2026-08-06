@@ -18,10 +18,40 @@ async function ensureImport() {
 // Engines live in a per-id map; light eviction happens via manager.
 const engines = new Map<string, any>();
 
+/** Cap generation length from input size so small models don't freestyle. */
+function maxTokensFor(text: string): number {
+  // ~2 output tokens per input char is generous for CJK→EN; hard cap 256.
+  const n = Math.ceil(text.length * 2.5) + 16;
+  return Math.max(24, Math.min(256, n));
+}
+
+/** Strip common chatty preambles models still emit despite instructions. */
+function cleanTranslation(out: string, src: string): string {
+  let s = (out ?? "").trim();
+  // Drop wrapping quotes.
+  if (
+    (s.startsWith('"') && s.endsWith('"')) ||
+    (s.startsWith("“") && s.endsWith("”")) ||
+    (s.startsWith("'") && s.endsWith("'"))
+  ) {
+    s = s.slice(1, -1).trim();
+  }
+  // Drop "Translation:" / "Here is the translation:" prefixes.
+  s = s.replace(/^(?:here(?:'s| is)(?: the)?\s+)?translation\s*[:：\-–]\s*/i, "");
+  s = s.replace(/^(?:translated\s+text|output)\s*[:：\-–]\s*/i, "");
+  // If model admits unreadable OCR, surface empty.
+  if (/^\[(?:unreadable|illegible|garbled|n\/a|none)\]$/i.test(s)) return "";
+  // Refuse obvious freeform songs when input was short.
+  if (src.length < 40 && s.length > src.length * 8 && s.includes("\n")) {
+    // Likely invented multi-line content — keep first line only.
+    s = s.split("\n").map((l) => l.trim()).find(Boolean) ?? s;
+  }
+  return s.trim();
+}
+
 export const webllmEngine: Engine = {
   async isSupported() {
     try {
-      // WebLLM is the entry function. Calling with no args checks GPU.
       return !!(navigator as any).gpu;
     } catch {
       return false;
@@ -61,16 +91,27 @@ export const webllmEngine: Engine = {
     const engine = engines.get(entry.id);
     if (!engine) throw new Error(`Model ${entry.id} not loaded.`);
 
-    // WebLLM is OpenAI-compatible. We prompt the LLM to translate.
-    // For "auto" src/tgt we just say "to <tgt>".
+    const input = (text ?? "").trim();
+    if (!input) return "";
+
+    // Strict machine-translator prompt. Small models invent poetry/songs
+    // when given OCR noise unless we clamp temperature + length hard.
     const sys =
-      `You are Lantern, a translation engine. ` +
-      `Translate faithfully, preserve tone, keep numbers/formatting. ` +
-      `Output only the translation, no preamble, no quotes.`;
+      `You are a machine translation engine, not a chatbot. ` +
+      `Translate the user's text faithfully. ` +
+      `Rules:\n` +
+      `1. Output ONLY the translation — no quotes, no labels, no explanation.\n` +
+      `2. Do not invent, complete, rhyme, sing, or add content that is not in the input.\n` +
+      `3. Keep numbers, brand names, and formatting when possible.\n` +
+      `4. If the input is garbled OCR noise (random letters/symbols, not real words), output exactly: [unreadable]`;
+
     const user =
       src === "auto"
-        ? `Translate the following text into ${nameForLang(tgt)}.\n\n${text}`
-        : `Translate the following text from ${nameForLang(src)} into ${nameForLang(tgt)}.\n\n${text}`;
+        ? `Translate into ${nameForLang(tgt)}:\n\n${input}`
+        : `Translate from ${nameForLang(src)} into ${nameForLang(tgt)}:\n\n${input}`;
+
+    const max_tokens = maxTokensFor(input);
+    const temperature = 0;
 
     if (onToken) {
       const stream = await engine.chat.completions.create({
@@ -78,8 +119,9 @@ export const webllmEngine: Engine = {
           { role: "system", content: sys },
           { role: "user", content: user },
         ],
-        temperature: 0.2,
-        max_tokens: 1024,
+        temperature,
+        max_tokens,
+        top_p: 1,
         stream: true,
       });
       let acc = "";
@@ -91,7 +133,7 @@ export const webllmEngine: Engine = {
           onToken(delta);
         }
       }
-      return acc;
+      return cleanTranslation(acc, input);
     }
 
     const reply = await engine.chat.completions.create({
@@ -99,10 +141,11 @@ export const webllmEngine: Engine = {
         { role: "system", content: sys },
         { role: "user", content: user },
       ],
-      temperature: 0.2,
-      max_tokens: 1024,
+      temperature,
+      max_tokens,
+      top_p: 1,
     });
-    return reply.choices?.[0]?.message?.content ?? "";
+    return cleanTranslation(reply.choices?.[0]?.message?.content ?? "", input);
   },
 };
 
@@ -126,6 +169,7 @@ function nameForLang(code: string): string {
     vi: "Vietnamese",
     th: "Thai",
     id: "Indonesian",
+    auto: "the source language",
   };
   return m[code] ?? code;
 }

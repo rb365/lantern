@@ -23,6 +23,10 @@ async function ensureImport() {
 // One pipeline per model id, lazily created.
 const pipes = new Map<string, any>();
 
+function isDedicatedPair(entry: ModelEntry): boolean {
+  return entry.kind === "translation-dedicated";
+}
+
 export const transformersEngine: Engine = {
   async isSupported() {
     try {
@@ -70,17 +74,28 @@ export const transformersEngine: Engine = {
     if (!pipe) {
       throw new Error(`Model ${entry.id} not loaded. Call load() first.`);
     }
-    // OPUS-MT and other seq2seq models don't take src/tgt; the model
-    // itself embodies the direction. For general models (e.g. NLLB) we
-    // would prefix the input with the language tag.
-    const out = await pipe(text, {
-      // general models may need src_lang/tgt_lang for many-to-many
-      src_lang: src,
-      tgt_lang: tgt,
-    });
+    const input = (text ?? "").trim();
+    if (!input) return "";
+
+    // OPUS-MT (and other dedicated pair models) already encode direction.
+    // Passing bogus src_lang/tgt_lang (e.g. "auto") can confuse the pipe
+    // and produce garbage. Only set lang args for true multilingual models.
+    const opts: Record<string, unknown> = {
+      // Keep generation short relative to input — stops runaway decoding.
+      max_new_tokens: Math.max(16, Math.min(128, Math.ceil(input.length * 2) + 8)),
+    };
+    if (!isDedicatedPair(entry)) {
+      if (src && src !== "auto") opts.src_lang = src;
+      if (tgt && tgt !== "auto") opts.tgt_lang = tgt;
+    }
+
+    const out = await pipe(input, opts);
     // Output is typically [{ translation_text: string }]
-    if (Array.isArray(out) && out[0]?.translation_text) return out[0].translation_text;
-    if (typeof out === "string") return out;
-    return JSON.stringify(out);
+    let result = "";
+    if (Array.isArray(out) && out[0]?.translation_text) result = out[0].translation_text;
+    else if (typeof out === "string") result = out;
+    else result = JSON.stringify(out);
+
+    return (result ?? "").trim();
   },
 };
